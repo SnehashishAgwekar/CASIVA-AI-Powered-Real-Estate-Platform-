@@ -18,6 +18,7 @@ import EditListingModal from "./components/EditListingModal";
 
 const API_STREAM_URL = "http://localhost:8000/api/v1/chat-stream";
 const API_VERIFY_URL = "http://localhost:8000/api/v1/verify-property";
+const API_VERIFY_LINK_URL = "http://localhost:8000/api/v1/verify-property-link";
 const API_SIGNUP_URL = "http://localhost:8000/api/v1/auth/signup";
 const API_LOGIN_URL = "http://localhost:8000/api/v1/auth/login";
 const API_BROKER_LISTINGS_URL = "http://localhost:8000/api/v1/broker/my-listings";
@@ -84,11 +85,23 @@ const newSessionObject = () => ({
   messages: [{ ...WELCOME_MESSAGE }],
 });
 
+// A session is only "real" once the user has actually said something in it —
+// otherwise it's just the auto-created placeholder every visit to Chat starts
+// with, and shouldn't survive in history once the tab closes.
+const hasRealContent = (session) =>
+  Array.isArray(session?.messages) && session.messages.some((m) => m.role === "user");
+
 const loadUserSessions = (uid) => {
   try {
     const saved = localStorage.getItem(sessionsStorageKey(uid));
     const parsed = saved ? JSON.parse(saved) : null;
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const nonEmpty = parsed.filter(hasRealContent);
+      // Sweep out any empty placeholders left over from before this fix so
+      // they don't keep reappearing on every future load.
+      try { localStorage.setItem(sessionsStorageKey(uid), JSON.stringify(nonEmpty)); } catch { /* storage may be blocked */ }
+      if (nonEmpty.length > 0) return nonEmpty;
+    }
   } catch { /* ignore corrupt/blocked storage */ }
   return [newSessionObject()];
 };
@@ -187,6 +200,37 @@ function AppShell() {
   const [verifyLoading, setVerifyLoading] = useState(false);
   const [verifyResult, setVerifyResult] = useState(null);
 
+  const [verifyMode, setVerifyMode] = useState("photos"); // "photos" | "link"
+  const [propertyUrl, setPropertyUrl] = useState("");
+  const [linkFiles, setLinkFiles] = useState([]);
+  const [linkVerifyLoading, setLinkVerifyLoading] = useState(false);
+  const [linkVerifyResult, setLinkVerifyResult] = useState(null);
+  const [linkScrapeFailed, setLinkScrapeFailed] = useState(false);
+  const [linkScrapeFailMessage, setLinkScrapeFailMessage] = useState("");
+  const [pastedDescription, setPastedDescription] = useState("");
+
+  // Consume a prefill dropped into sessionStorage by the Casiva browser
+  // extension (browser-extension/background.js). Runs whenever the user
+  // actually reaches the Verify view -- not on mount -- because a direct
+  // visit to /verify can bounce through /login first (see the route-guard
+  // effect above), so the prefill must survive that redirect and be applied
+  // once /verify is truly showing, not assumed present at initial load.
+  useEffect(() => {
+    if (activeView !== "verify") return;
+    const raw = sessionStorage.getItem("verify_link_prefill");
+    if (!raw) return;
+    sessionStorage.removeItem("verify_link_prefill"); // consume once; avoid reuse on a later visit
+    try {
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== "object") return;
+      setVerifyMode("link");
+      if (typeof parsed.url === "string") setPropertyUrl(parsed.url);
+      if (typeof parsed.description === "string") setPastedDescription(parsed.description);
+    } catch (err) {
+      console.warn("Ignoring malformed verify_link_prefill payload:", err);
+    }
+  }, [activeView]);
+
   // Chat state stays empty until a user logs in; applyAuthSuccess loads the
   // signed-in user's own history, handleLogout wipes it.
   const [sessions, setSessions] = useState([]);
@@ -197,6 +241,10 @@ function AppShell() {
   const messagesEndRef = useRef(null);
 
   // Persist the active user's chat history under their own storage key.
+  // Empty sessions (no user message yet) are kept in memory so the sidebar
+  // can show the conversation you're currently composing, but are never
+  // written to storage -- so closing the tab without saying anything leaves
+  // no trace next time you log in.
   useEffect(() => {
     if (!currentUser || !activeSessionId || sessions.length === 0) return;
     const updated = sessions.map((s) =>
@@ -204,11 +252,18 @@ function AppShell() {
     );
     setSessions(updated);
     try {
-      localStorage.setItem(sessionsStorageKey(currentUser.id), JSON.stringify(updated));
+      localStorage.setItem(sessionsStorageKey(currentUser.id), JSON.stringify(updated.filter(hasRealContent)));
     } catch { /* storage may be blocked */ }
   }, [messages]);
 
   const createNewChat = () => {
+    // Reuse the current session if it's already blank instead of piling up
+    // multiple empty "New Conversation" placeholders side by side.
+    const active = sessions.find((s) => s.id === activeSessionId);
+    if (active && !hasRealContent(active)) {
+      setMessages(active.messages);
+      return;
+    }
     const newSession = newSessionObject();
     setSessions((prev) => [newSession, ...prev]);
     setActiveSessionId(newSession.id);
@@ -228,7 +283,7 @@ function AppShell() {
     const filtered = sessions.filter((s) => s.id !== id);
     setSessions(filtered);
     try {
-      localStorage.setItem(sessionsStorageKey(currentUser?.id), JSON.stringify(filtered));
+      localStorage.setItem(sessionsStorageKey(currentUser?.id), JSON.stringify(filtered.filter(hasRealContent)));
     } catch { /* storage may be blocked */ }
 
     if (activeSessionId === id) {
@@ -373,14 +428,14 @@ function AppShell() {
     e.preventDefault();
     if (e.dataTransfer.files) {
       const filesArray = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
-      setSelectedFiles(prev => [...prev, ...filesArray].slice(0, 8));
+      setSelectedFiles(prev => [...prev, ...filesArray].slice(0, 12));
     }
   };
 
   const handleFileSelect = (e) => {
     if (e.target.files) {
       const filesArray = Array.from(e.target.files).filter(f => f.type.startsWith("image/"));
-      setSelectedFiles(prev => [...prev, ...filesArray].slice(0, 8));
+      setSelectedFiles(prev => [...prev, ...filesArray].slice(0, 12));
     }
   };
 
@@ -406,6 +461,57 @@ function AppShell() {
       alert(`Verification Error: ${err.message}`);
     } finally {
       setVerifyLoading(false);
+    }
+  };
+
+  const handleLinkFileDrop = (e) => {
+    e.preventDefault();
+    if (e.dataTransfer.files) {
+      const filesArray = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith("image/"));
+      setLinkFiles(prev => [...prev, ...filesArray].slice(0, 12));
+    }
+  };
+
+  const handleLinkFileSelect = (e) => {
+    if (e.target.files) {
+      const filesArray = Array.from(e.target.files).filter(f => f.type.startsWith("image/"));
+      setLinkFiles(prev => [...prev, ...filesArray].slice(0, 12));
+    }
+  };
+
+  const removeLinkFile = (index) => {
+    setLinkFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleVerifyLinkSubmit = async () => {
+    if (!propertyUrl.trim() || linkFiles.length === 0 || linkVerifyLoading) return;
+    setLinkVerifyLoading(true);
+    setLinkVerifyResult(null);
+    setLinkScrapeFailed(false);
+
+    const formData = new FormData();
+    formData.append("property_url", propertyUrl.trim());
+    linkFiles.forEach((file) => formData.append("images", file));
+    if (pastedDescription.trim()) formData.append("pasted_description", pastedDescription.trim());
+
+    try {
+      const res = await fetch(API_VERIFY_LINK_URL, { method: "POST", body: formData });
+      const data = await res.json();
+      if (!res.ok) {
+        // The backend can't scrape some listing sites (bot-protected pages) — offer
+        // a paste-in fallback instead of just failing outright.
+        if (data?.detail?.error === "scrape_failed") {
+          setLinkScrapeFailed(true);
+          setLinkScrapeFailMessage(data.detail.message || "Could not read that listing page automatically.");
+          return;
+        }
+        throw new Error(errDetail(data, "Verification failed"));
+      }
+      setLinkVerifyResult(data);
+    } catch (err) {
+      alert(`Verification Error: ${err.message}`);
+    } finally {
+      setLinkVerifyLoading(false);
     }
   };
 
@@ -1522,55 +1628,153 @@ function AppShell() {
         ) : (
           <div className="flex-1 overflow-y-auto p-8 font-body space-y-8 max-w-5xl mx-auto w-full">
             <div className="bg-[#FFFFFF]/80 border border-[#C6A15B]/30 p-6 rounded-md shadow-2xl space-y-6">
-              <div>
-                <h3 className="text-lg font-display text-[#2B2B2B] flex items-center gap-2"><Sparkles className="w-5 h-5 text-[#C6A15B]" /> Property Room &amp; BHK Verification</h3>
-                <p className="text-xs text-[#8B8B8B] mt-1">Upload listing photographs to independently verify declared BHK configurations using Gemini 3.6 Flash vision AI.</p>
+              <div className="flex gap-2 border-b border-[#E4DCC9] pb-4">
+                <button onClick={() => setVerifyMode("photos")} className={`px-4 py-2 rounded-sm text-xs font-mono font-semibold uppercase tracking-wider transition border ${verifyMode === "photos" ? "bg-[#C6A15B] text-[#1E1E1E] border-[#C6A15B]" : "bg-[#F1E9D8] text-[#5B5B5B] border-[#E4DCC9] hover:border-[#C6A15B]/40"}`}>
+                  Verify Listing
+                </button>
+                <button onClick={() => setVerifyMode("link")} className={`px-4 py-2 rounded-sm text-xs font-mono font-semibold uppercase tracking-wider transition border ${verifyMode === "link" ? "bg-[#C6A15B] text-[#1E1E1E] border-[#C6A15B]" : "bg-[#F1E9D8] text-[#5B5B5B] border-[#E4DCC9] hover:border-[#C6A15B]/40"}`}>
+                  Verify via Link
+                </button>
               </div>
 
-              <div className="space-y-2">
-                <label className="text-xs font-mono uppercase tracking-wider text-[#C6A15B] font-semibold">Select Claimed Configuration:</label>
-                <div className="flex gap-3">
-                  {[1, 2, 3, 4, 5].map((bhk) => (
-                    <button key={bhk} onClick={() => setSelectedBhk(bhk)} className={`px-4 py-2 rounded-sm text-xs font-mono font-semibold transition border ${selectedBhk === bhk ? "bg-[#C6A15B] text-[#1E1E1E] border-[#C6A15B]" : "bg-[#F1E9D8] text-[#5B5B5B] border-[#E4DCC9] hover:border-[#C6A15B]/40"}`}>
-                      {bhk} BHK
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs font-mono uppercase tracking-wider text-[#C6A15B] font-semibold">Upload Room Photos (Max 8):</label>
-                <div onDragOver={(e) => e.preventDefault()} onDrop={handleFileDrop} className="border-2 border-dashed border-[#E4DCC9] hover:border-[#C6A15B]/50 rounded-md p-8 text-center bg-[#FAF8F4]/60 transition flex flex-col items-center justify-center cursor-pointer relative" onClick={() => document.getElementById("hiddenFileInput").click()}>
-                  <input id="hiddenFileInput" type="file" multiple accept="image/*" className="hidden" onChange={handleFileSelect} />
-                  <Upload className="w-8 h-8 text-[#C6A15B] mb-2" />
-                  <p className="text-sm text-[#5B5B5B] font-medium">Drag and drop apartment photos here, or click to browse</p>
-                  <p className="text-[11px] text-[#8B8B8B] mt-1">Supports PNG, JPG, JPEG (Analyzes distinct bedrooms)</p>
-                </div>
-              </div>
-
-              {selectedFiles.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-xs font-mono text-[#8B8B8B]">Selected Photos ({selectedFiles.length}/8):</p>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    {selectedFiles.map((file, idx) => (
-                      <div key={idx} className="relative group rounded-md overflow-hidden border border-[#E4DCC9] bg-[#FAF8F4] h-28">
-                        <img src={URL.createObjectURL(file)} alt={file.name} className="w-full h-full object-cover" />
-                        <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
-                          <button onClick={(e) => { e.stopPropagation(); removeFile(idx); }} className="p-1.5 bg-red-600 hover:bg-red-700 text-white rounded-full transition" title="Remove Image"><X className="w-3.5 h-3.5" /></button>
-                        </div>
-                        <span className="absolute bottom-1 left-1 bg-black/70 text-[9px] font-mono px-1.5 py-0.5 rounded text-white">#{idx + 1}</span>
-                      </div>
-                    ))}
+              {verifyMode === "photos" && (
+                <>
+                  <div>
+                    <h3 className="text-lg font-display text-[#2B2B2B] flex items-center gap-2"><Sparkles className="w-5 h-5 text-[#C6A15B]" /> Property Room &amp; BHK Verification</h3>
+                    <p className="text-xs text-[#8B8B8B] mt-1">Upload listing photographs to independently verify declared BHK configurations using Gemini 3.6 Flash vision AI.</p>
                   </div>
-                </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono uppercase tracking-wider text-[#C6A15B] font-semibold">Select Claimed Configuration:</label>
+                    <div className="flex gap-3">
+                      {[1, 2, 3, 4, 5].map((bhk) => (
+                        <button key={bhk} onClick={() => setSelectedBhk(bhk)} className={`px-4 py-2 rounded-sm text-xs font-mono font-semibold transition border ${selectedBhk === bhk ? "bg-[#C6A15B] text-[#1E1E1E] border-[#C6A15B]" : "bg-[#F1E9D8] text-[#5B5B5B] border-[#E4DCC9] hover:border-[#C6A15B]/40"}`}>
+                          {bhk} BHK
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono uppercase tracking-wider text-[#C6A15B] font-semibold">Upload Room Photos (Max 12):</label>
+                    <div onDragOver={(e) => e.preventDefault()} onDrop={handleFileDrop} className="border-2 border-dashed border-[#E4DCC9] hover:border-[#C6A15B]/50 rounded-md p-8 text-center bg-[#FAF8F4]/60 transition flex flex-col items-center justify-center cursor-pointer relative" onClick={() => document.getElementById("hiddenFileInput").click()}>
+                      <input id="hiddenFileInput" type="file" multiple accept="image/*" className="hidden" onChange={handleFileSelect} />
+                      <Upload className="w-8 h-8 text-[#C6A15B] mb-2" />
+                      <p className="text-sm text-[#5B5B5B] font-medium">Drag and drop apartment photos here, or click to browse</p>
+                      <p className="text-[11px] text-[#8B8B8B] mt-1">Supports PNG, JPG, JPEG (Analyzes distinct bedrooms)</p>
+                    </div>
+                  </div>
+
+                  {selectedFiles.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-mono text-[#8B8B8B]">Selected Photos ({selectedFiles.length}/12):</p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {selectedFiles.map((file, idx) => (
+                          <div key={idx} className="relative group rounded-md overflow-hidden border border-[#E4DCC9] bg-[#FAF8F4] h-28">
+                            <img src={URL.createObjectURL(file)} alt={file.name} className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                              <button onClick={(e) => { e.stopPropagation(); removeFile(idx); }} className="p-1.5 bg-red-600 hover:bg-red-700 text-white rounded-full transition" title="Remove Image"><X className="w-3.5 h-3.5" /></button>
+                            </div>
+                            <span className="absolute bottom-1 left-1 bg-black/70 text-[9px] font-mono px-1.5 py-0.5 rounded text-white">#{idx + 1}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <button onClick={handleVerifySubmit} disabled={selectedFiles.length === 0 || verifyLoading} className="w-full py-3 bg-[#C6A15B] hover:bg-[#D9B876] disabled:opacity-40 text-[#1E1E1E] font-semibold text-xs rounded-sm transition font-mono uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg">
+                    {verifyLoading ? (<><Loader2 className="w-4 h-4 animate-spin" /> Analyzing via Gemini 3.6 Flash...</>) : (<><Sparkles className="w-4 h-4" /> Verify BHK Configuration Now</>)}
+                  </button>
+                </>
               )}
 
-              <button onClick={handleVerifySubmit} disabled={selectedFiles.length === 0 || verifyLoading} className="w-full py-3 bg-[#C6A15B] hover:bg-[#D9B876] disabled:opacity-40 text-[#1E1E1E] font-semibold text-xs rounded-sm transition font-mono uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg">
-                {verifyLoading ? (<><Loader2 className="w-4 h-4 animate-spin" /> Analyzing via Gemini 3.6 Flash...</>) : (<><Sparkles className="w-4 h-4" /> Verify BHK Configuration Now</>)}
-              </button>
+              {verifyMode === "link" && (
+                <>
+                  <div>
+                    <h3 className="text-lg font-display text-[#2B2B2B] flex items-center gap-2"><Sparkles className="w-5 h-5 text-[#C6A15B]" /> Verify Listing via Link</h3>
+                    <p className="text-xs text-[#8B8B8B] mt-1">Paste a listing link and upload your own photos to verify the claims against what&apos;s actually shown.</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono uppercase tracking-wider text-[#C6A15B] font-semibold">Listing URL:</label>
+                    <input
+                      type="url"
+                      value={propertyUrl}
+                      onChange={(e) => {
+                        setPropertyUrl(e.target.value);
+                        // A new URL should always trigger a fresh scrape, not silently
+                        // reuse pasted text left over from a previous failed attempt.
+                        if (pastedDescription || linkScrapeFailed) {
+                          setPastedDescription("");
+                          setLinkScrapeFailed(false);
+                          setLinkScrapeFailMessage("");
+                        }
+                      }}
+                      placeholder="https://www.magicbricks.com/... or 99acres.com/..."
+                      className="w-full bg-[#FAF8F4]/90 border border-[#E4DCC9] focus:border-[#C6A15B] rounded-md py-3 px-4 text-sm text-[#2B2B2B] placeholder-[#8B8B8B] focus:outline-none focus:ring-2 focus:ring-[#C6A15B]/30 transition shadow-inner"
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono uppercase tracking-wider text-[#C6A15B] font-semibold">Upload Your Own Photos of This Property (Max 12):</label>
+                    <div onDragOver={(e) => e.preventDefault()} onDrop={handleLinkFileDrop} className="border-2 border-dashed border-[#E4DCC9] hover:border-[#C6A15B]/50 rounded-md p-8 text-center bg-[#FAF8F4]/60 transition flex flex-col items-center justify-center cursor-pointer relative" onClick={() => document.getElementById("hiddenLinkFileInput").click()}>
+                      <input id="hiddenLinkFileInput" type="file" multiple accept="image/*" className="hidden" onChange={handleLinkFileSelect} />
+                      <Upload className="w-8 h-8 text-[#C6A15B] mb-2" />
+                      <p className="text-sm text-[#5B5B5B] font-medium">Drag and drop your own photos here, or click to browse</p>
+                      <p className="text-[11px] text-[#8B8B8B] mt-1">Supports PNG, JPG, JPEG</p>
+                    </div>
+                  </div>
+
+                  {linkFiles.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-mono text-[#8B8B8B]">Selected Photos ({linkFiles.length}/12):</p>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        {linkFiles.map((file, idx) => (
+                          <div key={idx} className="relative group rounded-md overflow-hidden border border-[#E4DCC9] bg-[#FAF8F4] h-28">
+                            <img src={URL.createObjectURL(file)} alt={file.name} className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition flex items-center justify-center">
+                              <button onClick={(e) => { e.stopPropagation(); removeLinkFile(idx); }} className="p-1.5 bg-red-600 hover:bg-red-700 text-white rounded-full transition" title="Remove Image"><X className="w-3.5 h-3.5" /></button>
+                            </div>
+                            <span className="absolute bottom-1 left-1 bg-black/70 text-[9px] font-mono px-1.5 py-0.5 rounded text-white">#{idx + 1}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {linkScrapeFailed && (
+                    <div className="p-3 bg-[#FBEAEA]/30 border border-[#C24545]/30 rounded-sm">
+                      <div className="flex items-start gap-1.5 text-xs text-[#6B6B6B] font-body">
+                        <AlertTriangle className="w-3.5 h-3.5 text-[#C24545] flex-shrink-0 mt-0.5" />
+                        <span>{linkScrapeFailMessage} Use the paste-in box below instead &mdash; it works for any listing, blocked or not.</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="space-y-2">
+                    <label className="text-xs font-mono uppercase tracking-wider text-[#C6A15B] font-semibold">Or Paste the Listing Description (Optional):</label>
+                    <p className="text-[11px] text-[#8B8B8B]">Many real estate portals (MagicBricks, 99acres, apartments.com, etc.) block automated reading entirely. If left blank we&apos;ll try to read the URL automatically &mdash; if that fails or you&apos;d rather skip the wait, paste the listing&apos;s title, price, BHK, amenities, and description here and we&apos;ll compare that instead.</p>
+                    <textarea
+                      value={pastedDescription}
+                      onChange={(e) => setPastedDescription(e.target.value)}
+                      placeholder="Paste the listing title, price, BHK, amenities, and description here..."
+                      rows={4}
+                      className="w-full bg-[#FAF8F4]/90 border border-[#E4DCC9] focus:border-[#C6A15B] rounded-md py-3 px-4 text-sm text-[#2B2B2B] placeholder-[#8B8B8B] focus:outline-none focus:ring-2 focus:ring-[#C6A15B]/30 transition shadow-inner resize-y"
+                    />
+                  </div>
+
+                  <button onClick={handleVerifyLinkSubmit} disabled={!propertyUrl.trim() || linkFiles.length === 0 || linkVerifyLoading} className="w-full py-3 bg-[#C6A15B] hover:bg-[#D9B876] disabled:opacity-40 text-[#1E1E1E] font-semibold text-xs rounded-sm transition font-mono uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg">
+                    {linkVerifyLoading ? (
+                      <><Loader2 className="w-4 h-4 animate-spin" /> {pastedDescription.trim() ? "Analyzing pasted description via Gemini..." : "Scraping listing & analyzing via Gemini..."}</>
+                    ) : (
+                      <><Sparkles className="w-4 h-4" /> {pastedDescription.trim() ? "Compare Pasted Description to Photos" : "Compare Listing to Photos"}</>
+                    )}
+                  </button>
+                </>
+              )}
             </div>
 
-            {verifyResult && (
+            {verifyMode === "photos" && verifyResult && (
               <div className="bg-[#FFFFFF]/90 border border-[#E4DCC9] p-6 rounded-md shadow-2xl space-y-6">
                 <div className="flex items-center justify-between border-b border-[#E4DCC9] pb-4">
                   <div>
@@ -1646,6 +1850,122 @@ function AppShell() {
                         </div>
                       )
                     })}
+                  </div>
+                </div>
+
+                <div className="pt-2 flex justify-end">
+                  <button onClick={() => navigate(VIEW_PATHS.chat)} className="px-4 py-2 bg-[#F1E9D8] hover:bg-[#E9DFC8] text-[#5B5B5B] border border-[#E4DCC9] rounded-sm text-xs font-mono transition">
+                    Return to Active Chat
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {verifyMode === "link" && linkVerifyResult && (
+              <div className="bg-[#FFFFFF]/90 border border-[#E4DCC9] p-6 rounded-md shadow-2xl space-y-6">
+                <div className="flex items-center justify-between border-b border-[#E4DCC9] pb-4">
+                  <div>
+                    <h4 className="text-sm font-mono uppercase tracking-wider text-[#C6A15B]">Listing Comparison Report</h4>
+                    <p className="text-xs text-[#8B8B8B] mt-0.5">
+                      Compared {linkVerifyResult.images_analyzed} photo(s) against{" "}
+                      <a href={linkVerifyResult.property_url} target="_blank" rel="noreferrer" className="underline hover:text-[#C6A15B]">the listing page</a>
+                    </p>
+                  </div>
+                  <div className={`px-3 py-1 rounded-sm text-xs font-mono uppercase tracking-wider flex items-center gap-1.5 border ${linkVerifyResult.result.matches ? "bg-[#D9EAD3]/40 text-[#4B7A46] border-[#A9C9A0]/40" : "bg-[#FBEAEA]/40 text-[#C24545] border-[#C24545]/40"}`}>
+                    {linkVerifyResult.result.matches ? <CheckCircle className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
+                    {linkVerifyResult.result.matches ? "Claims Match Photos" : linkVerifyResult.result.photos_match_listing === false ? "Different Property Detected" : "Discrepancies Found"}
+                  </div>
+                </div>
+
+                {linkVerifyResult.result.photos_match_listing === false && (
+                  <div className="p-4 bg-[#FBEAEA]/50 border-2 border-[#C24545]/50 rounded-sm space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-xs text-[#C24545] font-mono uppercase tracking-wider font-bold">
+                      <AlertTriangle className="w-4 h-4" /> Possible Photo Mismatch
+                    </div>
+                    <p className="text-xs text-[#6B6B6B] font-body leading-relaxed">
+                      These photos may not be from this listing at all. {linkVerifyResult.result.identity_mismatch_reason}
+                    </p>
+                  </div>
+                )}
+
+                <div className="p-4 bg-[#FAF8F4] rounded-sm border border-[#E4DCC9] space-y-2">
+                  <p className="text-xs text-[#6B6B6B] leading-relaxed font-body">{linkVerifyResult.result.summary}</p>
+                  <div className="grid grid-cols-2 gap-2 pt-2 text-xs font-mono">
+                    <div><span className="text-[#8B8B8B]">Claimed BHK: </span><span className="text-[#2B2B2B] font-semibold">{linkVerifyResult.result.claims.claimed_bhk ?? "Not stated"}</span></div>
+                    <div>
+                      <span className="text-[#8B8B8B]">Bedrooms Visible in Photos: </span>
+                      <span className={`font-semibold ${linkVerifyResult.result.claims.claimed_bhk != null && linkVerifyResult.result.visible_bedroom_count != null && linkVerifyResult.result.visible_bedroom_count < linkVerifyResult.result.claims.claimed_bhk ? "text-[#C24545]" : "text-[#2B2B2B]"}`}>
+                        {linkVerifyResult.result.visible_bedroom_count ?? "None visible"}
+                      </span>
+                    </div>
+                    <div><span className="text-[#8B8B8B]">Claimed Price: </span><span className="text-[#2B2B2B] font-semibold">{linkVerifyResult.result.claims.claimed_price ?? "Not stated"}</span></div>
+                    <div><span className="text-[#8B8B8B]">Claimed Area: </span><span className="text-[#2B2B2B] font-semibold">{linkVerifyResult.result.claims.claimed_area ?? "Not stated"}</span></div>
+                    <div><span className="text-[#8B8B8B]">Confidence: </span><span className="text-[#2B2B2B] font-semibold">{(linkVerifyResult.result.confidence * 100).toFixed(0)}%</span></div>
+                  </div>
+                  {linkVerifyResult.result.claims.claimed_amenities?.length > 0 && (
+                    <p className="text-xs text-[#6B6B6B] pt-1"><span className="text-[#8B8B8B] font-mono">Claimed amenities: </span>{linkVerifyResult.result.claims.claimed_amenities.join(", ")}</p>
+                  )}
+                </div>
+
+                {linkVerifyResult.result.discrepancies.length > 0 && (
+                  <div className="p-2.5 bg-[#FBEAEA]/20 border border-[#C24545]/30 rounded-sm space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-[10px] text-[#C24545] font-mono uppercase tracking-wider font-semibold">
+                      <AlertTriangle className="w-3 h-3" /> Discrepancies
+                    </div>
+                    {linkVerifyResult.result.discrepancies.map((d, i) => (
+                      <p key={i} className="text-xs text-[#6B6B6B] font-body">⚠️ {d}</p>
+                    ))}
+                  </div>
+                )}
+
+                {linkVerifyResult.result.low_confidence_note && (
+                  <div className="p-2.5 bg-[#FBF0DC]/20 border border-[#C6A15B]/30 rounded-sm space-y-1.5">
+                    <div className="flex items-center gap-1.5 text-[10px] text-[#C6A15B] font-mono uppercase tracking-wider font-semibold">
+                      <AlertTriangle className="w-3 h-3" /> Low Confidence — Manual Check Suggested
+                    </div>
+                    <p className="text-xs text-[#6B6B6B] font-body">{linkVerifyResult.result.low_confidence_note}</p>
+                  </div>
+                )}
+
+                {linkVerifyResult.result.amenity_verification?.length > 0 && (
+                  <div className="space-y-3">
+                    <p className="text-xs font-mono uppercase tracking-wider text-[#8B8B8B]">Claimed Amenities — Checked Against Photos:</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      {linkVerifyResult.result.amenity_verification.map((a, i) => {
+                        const cfg = {
+                          confirmed: { icon: CheckCircle, color: "text-[#4B7A46]", bg: "bg-[#D9EAD3]/30 border-[#A9C9A0]/40" },
+                          contradicted: { icon: AlertTriangle, color: "text-[#C24545]", bg: "bg-[#FBEAEA]/30 border-[#C24545]/30" },
+                          not_visible: { icon: AlertTriangle, color: "text-[#C6A15B]", bg: "bg-[#FBF0DC]/30 border-[#C6A15B]/30" },
+                        }[a.status] || { icon: AlertTriangle, color: "text-[#8B8B8B]", bg: "bg-[#F1E9D8]/50 border-[#E4DCC9]" };
+                        const Icon = cfg.icon;
+                        return (
+                          <div key={i} className={`p-2.5 rounded-sm border text-xs flex items-start gap-2 ${cfg.bg}`}>
+                            <Icon className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${cfg.color}`} />
+                            <div>
+                              <p className="text-[#2B2B2B] font-medium capitalize">{a.amenity}</p>
+                              <p className={`text-[10px] font-mono uppercase tracking-wider ${cfg.color}`}>
+                                {a.status === "confirmed" ? "Confirmed in photos" : a.status === "contradicted" ? "Contradicted by photos" : "Not seen in photos"}
+                              </p>
+                              {a.note && <p className="text-[10px] text-[#8B8B8B] mt-0.5">{a.note}</p>}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  <p className="text-xs font-mono uppercase tracking-wider text-[#8B8B8B]">Per-Photo Visual Findings:</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {linkVerifyResult.result.visual_findings.map((f, i) => (
+                      <div key={i} className="p-3 bg-[#FAF8F4]/80 border border-[#E4DCC9] rounded-sm text-xs space-y-1">
+                        <span className="font-mono text-[#C6A15B] font-semibold">Photo #{f.photo_index}</span>
+                        <p className="text-[#2B2B2B] font-medium">{f.visible_room_or_area}</p>
+                        {f.supports_claims.length > 0 && <p className="text-[10px] text-[#4B7A46]">✓ Confirms: {f.supports_claims.join(", ")}</p>}
+                        {f.contradicts_claims.length > 0 && <p className="text-[10px] text-[#C24545]">✗ Contradicts: {f.contradicts_claims.join(", ")}</p>}
+                      </div>
+                    ))}
                   </div>
                 </div>
 
