@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "Casiva Listing Capture",
+  "version": "1.0.0",
+  "description": "Capture the listing page you're viewing and send it to Casiva's Verify via Link tool.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["http://localhost:5173/*"],
+  "action": {
+    "default_title": "Send this listing to Casiva Verify"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

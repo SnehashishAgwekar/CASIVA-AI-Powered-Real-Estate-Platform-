@@ -16,7 +16,12 @@ tavily-python==0.5.0
 fastembed==0.5.0
 # langchain-groq
 requests==2.31.0
+crawl4ai==0.9.3
 resend==2.45.0
+# After installing requirements, run once: playwright install chromium
+# (Crawl4AI's AsyncWebCrawler uses Playwright's browser binary under the
+# hood; pip installs the Playwright package as its dependency, but the
+# browser binary itself still needs this separate download step.)
 
 # Auth (JWT + password hashing + form parsing)
 python-jose[cryptography]==3.5.0
