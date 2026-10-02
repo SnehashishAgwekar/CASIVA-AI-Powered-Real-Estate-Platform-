@@ -1,0 +1,68 @@
+# Render Blueprint: deploys the FastAPI backend (Docker) and the Vite frontend
+# (static site). In Render: New -> Blueprint -> pick this repo.
+# Secrets are `sync: false`, so Render asks for their values on first deploy.
+services:
+  # ---------- Backend: FastAPI + LangGraph agent ----------
+  - type: web
+    name: casiva-api
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: free
+    region: singapore
+    healthCheckPath: /
+    buildFilter:
+      paths:
+        - backend/**
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SECRET_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: SCRAPERAPI_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+      - key: TEXTBEE_API_KEY
+        sync: false
+      - key: TEXTBEE_DEVICE_ID
+        sync: false
+      - key: WASENDER_API_KEY
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: RESEND_FROM_EMAIL
+        sync: false
+      # Frontend URL, e.g. https://casiva.onrender.com (no trailing slash)
+      - key: FRONTEND_ORIGINS
+        sync: false
+
+  # ---------- Frontend: React + Vite static site ----------
+  - type: web
+    name: casiva
+    runtime: static
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    buildFilter:
+      paths:
+        - frontend/**
+    # client-side routes (/chat, /dashboard, ...) must serve index.html
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      # Backend URL, e.g. https://casiva-api.onrender.com (no trailing slash)
+      - key: VITE_API_URL
+        sync: false
