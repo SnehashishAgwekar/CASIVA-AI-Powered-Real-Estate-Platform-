@@ -7,10 +7,16 @@ load_dotenv()
 
 QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
 QDRANT_PORT = int(os.getenv("QDRANT_PORT", 6333))
+# Qdrant Cloud (production): set QDRANT_URL + QDRANT_API_KEY instead of host/port
+QDRANT_URL = os.getenv("QDRANT_URL")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = "real_estate_docs"
 
 # Initialize Qdrant Client connection
-qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
+if QDRANT_URL:
+    qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+else:
+    qdrant_client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
 
 def init_qdrant_collection():
     """

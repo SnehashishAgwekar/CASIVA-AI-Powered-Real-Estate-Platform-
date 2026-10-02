@@ -17,7 +17,11 @@ app = FastAPI(title="Real Estate AI")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    # FRONTEND_ORIGINS: comma-separated deployed frontend URLs, e.g.
+    # "https://casiva.vercel.app" (set in the hosting dashboard).
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"] + [
+        o.strip().rstrip("/") for o in os.getenv("FRONTEND_ORIGINS", "").split(",") if o.strip()
+    ],
     # Vite bumps to the next free port (5174, 5175, ...) whenever 5173 is
     # already taken, which silently CORS-blocked every dev machine that
     # wasn't on the exact port above. Allow any localhost port too.

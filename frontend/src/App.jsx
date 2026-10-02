@@ -15,18 +15,19 @@ import PropertyDashboard from "./components/PropertyDashboard";
 import MyProfile from "./components/MyProfile";
 import BrokerAssistant from "./components/BrokerAssistant";
 import EditListingModal from "./components/EditListingModal";
+import { API_ORIGIN } from "./config";
 
-const API_STREAM_URL = "http://localhost:8000/api/v1/chat-stream";
-const API_VERIFY_URL = "http://localhost:8000/api/v1/verify-property";
-const API_VERIFY_LINK_URL = "http://localhost:8000/api/v1/verify-property-link";
-const API_SIGNUP_URL = "http://localhost:8000/api/v1/auth/signup";
-const API_LOGIN_URL = "http://localhost:8000/api/v1/auth/login";
-const API_BROKER_LISTINGS_URL = "http://localhost:8000/api/v1/broker/my-listings";
-const API_BROKER_CREATE_URL = "http://localhost:8000/api/v1/broker/listings";
-const API_BROKER_LEADS_URL = "http://localhost:8000/api/v1/broker/leads";
-const API_INTEREST_URL = (id) => `http://localhost:8000/api/v1/properties/${id}/interest`;
+const API_STREAM_URL = `${API_ORIGIN}/api/v1/chat-stream`;
+const API_VERIFY_URL = `${API_ORIGIN}/api/v1/verify-property`;
+const API_VERIFY_LINK_URL = `${API_ORIGIN}/api/v1/verify-property-link`;
+const API_SIGNUP_URL = `${API_ORIGIN}/api/v1/auth/signup`;
+const API_LOGIN_URL = `${API_ORIGIN}/api/v1/auth/login`;
+const API_BROKER_LISTINGS_URL = `${API_ORIGIN}/api/v1/broker/my-listings`;
+const API_BROKER_CREATE_URL = `${API_ORIGIN}/api/v1/broker/listings`;
+const API_BROKER_LEADS_URL = `${API_ORIGIN}/api/v1/broker/leads`;
+const API_INTEREST_URL = (id) => `${API_ORIGIN}/api/v1/properties/${id}/interest`;
 // Origin that serves uploaded media at /static/uploads/... (see backend main.py mount)
-const MEDIA_BASE = "http://localhost:8000";
+const MEDIA_BASE = `${API_ORIGIN}`;
 
 // Broker-uploaded photos are server-relative ("/static/uploads/xxx.jpg");
 // seed-data photos are already-absolute URLs (e.g. Unsplash). Only prefix
@@ -591,7 +592,7 @@ function AppShell() {
                     applicationServerKey: 'BEl62iUYgUivxIkv69yViEuiBIa-Ib9-SkvMeAtA3LFgDkJrxZJezsTu...' 
                 });
                 
-                await fetch('http://localhost:8000/api/v1/subscribe', {
+                await fetch(`${API_ORIGIN}/api/v1/subscribe`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ user_id: userId, ...subscription })
