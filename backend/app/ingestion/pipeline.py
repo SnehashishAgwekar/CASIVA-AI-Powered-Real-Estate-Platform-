@@ -40,25 +40,25 @@ def run_structured_ingestion(csv_path: str, db: Session):
     db.commit()
     print(f"Structured Ingestion Complete: Inserted {inserted_count} new properties into PostgreSQL.")
 
-def run_unstructured_ingestion(pdf_path: str):
+def run_unstructured_ingestion(pdf_path: str, source: str, id_offset: int = 100):
     """Chunks PDF document, generates embeddings, and inserts points into Qdrant."""
     init_qdrant_collection()
     chunks = extract_and_chunk_pdf(pdf_path)
-    
+
     embedding_model = TextEmbedding()
     embeddings = list(embedding_model.embed(chunks))
-    
+
     points = []
     for idx, (chunk, vector) in enumerate(zip(chunks, embeddings)):
         points.append({
-            "id": idx + 100,  # Starting ID offset
+            "id": idx + id_offset,
             "vector": vector.tolist(),
             "payload": {
                 "document": chunk,
-                "source": "ABC Residency Brochure PDF",
+                "source": source,
                 "file_path": pdf_path
             }
         })
-        
+
     qdrant_client.upsert(collection_name=COLLECTION_NAME, points=points)
     print(f"Unstructured Ingestion Complete: Uploaded {len(points)} vector chunks to Qdrant.")

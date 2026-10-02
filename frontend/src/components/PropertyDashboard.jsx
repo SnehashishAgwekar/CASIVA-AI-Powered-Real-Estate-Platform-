@@ -83,7 +83,11 @@ export default function PropertyDashboard({ token, currentUser, onAskAI, onProfi
         .then(async (res) => {
           const data = await res.json();
           if (!res.ok) throw new Error(data.detail || "Failed to load properties");
-          setProperties(Array.isArray(data) ? data : []);
+          // Hide listings with no photos from the explorer.
+          const withImages = (Array.isArray(data) ? data : []).filter(
+            (p) => Array.isArray(p.image_urls) && p.image_urls.some((u) => typeof u === "string" && u.trim())
+          );
+          setProperties(withImages);
         })
         .catch((err) => {
           setError(err.message || "Unable to load properties.");

@@ -9,6 +9,7 @@ instead of just counting bedrooms.
 import asyncio
 import base64
 import os
+import sys
 from typing import Dict, List, Optional
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
@@ -18,6 +19,8 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 from tavily import TavilyClient
+
+from app.services.image_utils import compress_for_llm
 
 load_dotenv()
 
@@ -157,6 +160,7 @@ def _model() -> ChatGoogleGenerativeAI:
 
 
 def _image_part(image_bytes: bytes, mime_type: str) -> dict:
+    image_bytes, mime_type = compress_for_llm(image_bytes, mime_type)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     return {"type": "image_url", "image_url": f"data:{mime_type};base64,{b64}"}
 
@@ -220,6 +224,25 @@ async def _scrape_with_crawl4ai(url: str, proxy_config: Optional[ProxyConfig] = 
     return raw_markdown
 
 
+def _run_crawl4ai_sync(url: str, proxy_config: Optional[ProxyConfig] = None) -> str:
+    """
+    Runs _scrape_with_crawl4ai to completion on a brand-new event loop, in
+    whatever thread this is called from (via asyncio.to_thread below).
+
+    Needed because uvicorn --reload forces WindowsSelectorEventLoopPolicy for
+    its own reload-subprocess compatibility (see uvicorn/loops/asyncio.py),
+    and SelectorEventLoop cannot spawn subprocesses on Windows at all — which
+    is exactly what Playwright/Crawl4AI needs to launch its browser. Building
+    our own ProactorEventLoop here sidesteps that ambient policy entirely
+    instead of depending on whatever uvicorn decided process-wide.
+    """
+    loop = asyncio.ProactorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(_scrape_with_crawl4ai(url, proxy_config))
+    finally:
+        loop.close()
+
+
 def _scraperapi_proxy_config() -> ProxyConfig:
     """
     ScraperAPI's proxy-port mode (as opposed to their REST endpoint) lets
@@ -281,7 +304,7 @@ async def scrape_listing_url(url: str) -> str:
         errors["Tavily"] = str(e)
 
     try:
-        text = await _scrape_with_crawl4ai(url)
+        text = await asyncio.to_thread(_run_crawl4ai_sync, url)
         if _looks_like_block_page(text):
             raise ValueError("the site returned a bot-block page instead of the listing")
         return text[:MAX_SCRAPED_CHARS]
@@ -290,7 +313,7 @@ async def scrape_listing_url(url: str) -> str:
 
     if SCRAPERAPI_KEY:
         try:
-            text = await _scrape_with_crawl4ai(url, proxy_config=_scraperapi_proxy_config())
+            text = await asyncio.to_thread(_run_crawl4ai_sync, url, _scraperapi_proxy_config())
             if _looks_like_block_page(text):
                 raise ValueError("the site returned a bot-block page instead of the listing")
             return text[:MAX_SCRAPED_CHARS]
