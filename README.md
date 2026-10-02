@@ -1,4 +1,4 @@
-# EstateAgent AI: Intelligent Real Estate Ecosystem
+# CASIVA(EstateAgent AI): Intelligent Real Estate Ecosystem
 
 An advanced, multi-agent real estate platform powered by Large Language Models (LLMs) and Computer Vision. This project integrates conversational AI for property discovery with an automated visual verification engine to detect fraudulent listing configurations.
 
