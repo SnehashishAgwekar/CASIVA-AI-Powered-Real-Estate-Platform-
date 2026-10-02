@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import {
   Send, Bot, User, Database, FileText, Globe, Sparkles,
   RotateCcw, Loader2, SlidersHorizontal, ChevronRight, Home, ShieldCheck,
-  Cpu, CheckCircle2, Plus, MessageSquare, Trash2, Upload, X, CheckCircle, AlertTriangle,
+  CheckCircle2, Plus, MessageSquare, Trash2, Upload, X, CheckCircle, AlertTriangle,
   LogOut, LogIn, UserPlus, Mail, Lock, Phone, Briefcase, MapPin, BedDouble,
   Tag, KeyRound, UserCircle, Pencil
 } from "lucide-react";
@@ -878,27 +878,27 @@ function AppShell() {
             {isSignup && (
               <div className="relative">
                 <User className="w-4 h-4 text-[#8B8B8B] absolute left-3 top-1/2 -translate-y-1/2" />
-                <input className={inputCls} type="text" placeholder="Full name" value={authForm.name}
+                <input id="auth-name" name="name" className={inputCls} type="text" placeholder="Full name" value={authForm.name}
                   onChange={setField("name")} autoComplete="name" disabled={authLoading} />
               </div>
             )}
 
             <div className="relative">
               <Mail className="w-4 h-4 text-[#8B8B8B] absolute left-3 top-1/2 -translate-y-1/2" />
-              <input className={inputCls} type="email" placeholder="Email address" value={authForm.email}
+              <input id="auth-email" name="email" className={inputCls} type="email" placeholder="Email address" value={authForm.email}
                 onChange={setField("email")} autoComplete="email" disabled={authLoading} />
             </div>
 
             <div className="relative">
               <Lock className="w-4 h-4 text-[#8B8B8B] absolute left-3 top-1/2 -translate-y-1/2" />
-              <input className={inputCls} type="password" placeholder="Password" value={authForm.password}
+              <input id="auth-password" name="password" className={inputCls} type="password" placeholder="Password" value={authForm.password}
                 onChange={setField("password")} autoComplete={isSignup ? "new-password" : "current-password"} disabled={authLoading} />
             </div>
 
             {isSignup && (
               <div className="relative">
                 <Phone className="w-4 h-4 text-[#8B8B8B] absolute left-3 top-1/2 -translate-y-1/2" />
-                <input className={inputCls} type="tel" placeholder="Phone number" value={authForm.phone_number}
+                <input id="auth-phone_number" name="phone_number" className={inputCls} type="tel" placeholder="Phone number" value={authForm.phone_number}
                   onChange={setField("phone_number")} autoComplete="tel" disabled={authLoading} />
               </div>
             )}
@@ -1414,15 +1414,6 @@ function AppShell() {
               </div>
             ))}
           </div>
-
-          <div className="p-3 bg-[#FAF8F4]/80 rounded-sm border border-[#E4DCC9] text-xs space-y-1.5 flex-shrink-0">
-            <div className="flex items-center gap-1.5 text-[#6B9A5E] font-semibold font-mono text-[11px] uppercase tracking-wider">
-              <ShieldCheck className="w-3.5 h-3.5" /> Multi-Agent Engine
-            </div>
-            <p className="text-[10px] text-[#8B8B8B] leading-relaxed">
-              LangGraph + Gemini 3.6-Flash orchestrating Postgres &amp; Gemini Vision Verification.
-            </p>
-          </div>
         </div>
 
         <div className="pt-3 border-t border-[#C6A15B]/15 flex-shrink-0 space-y-2">
@@ -1473,9 +1464,6 @@ function AppShell() {
                 <ChevronRight className="w-3.5 h-3.5 rotate-180" /> Back to Chat
               </button>
             )}
-            <div className="text-[10px] font-mono bg-[#F1E9D8] text-[#C6A15B] border border-[#C6A15B]/25 px-3 py-1 rounded-sm uppercase tracking-wider hidden lg:block">
-              {activeView === "chat" ? `Session · ${activeSessionId || "Init"}` : "Places365 + CLIP ViT-L-14"}
-            </div>
             <button
               onClick={handleLogout}
               title="Logout"
@@ -1498,23 +1486,10 @@ function AppShell() {
                   <div className={`relative rounded-md px-5 py-3.5 shadow-xl text-sm leading-relaxed space-y-2.5 ${msg.role === "user" ? "bg-[#C6A15B] text-[#1E1E1E] rounded-tr-none shadow-black/30" : "bg-[#FFFFFF]/90 border border-[#E4DCC9] text-[#5B5B5B] rounded-tl-none shadow-black/40 pl-6"}`}>
                     {msg.role === "assistant" && <span className="absolute left-0 top-0 bottom-0 w-1.5 bg-gradient-to-b from-[#C6A15B] to-[#6B9A5E] rounded-l-md" />}
 
-                    {msg.steps && msg.steps.length > 0 && (
-                      <div className="mb-3 p-2.5 rounded-sm bg-[#FAF8F4] border border-[#E4DCC9] text-xs font-mono text-[#3E7CA6] space-y-1.5 shadow-inner">
-                        <div className="flex items-center gap-1.5 text-[10px] text-[#C6A15B] uppercase tracking-wider font-semibold border-b border-[#E4DCC9]/60 pb-1 mb-1">
-                          <Cpu className="w-3 h-3 animate-spin" /> LangGraph Telemetry Trace
-                        </div>
-                        {msg.steps.map((step, sIdx) => (
-                          <div key={sIdx} className="flex items-center gap-2 text-[11px]">
-                            <CheckCircle2 className="w-3 h-3 text-[#6B9A5E] flex-shrink-0" />
-                            <span className="text-[#6B6B6B]">{step}</span>
-                          </div>
-                        ))}
-                        {loading && idx === messages.length - 1 && (
-                          <div className="flex items-center gap-2 text-[11px] text-[#8B8B8B] italic pt-0.5">
-                            <Loader2 className="w-3 h-3 animate-spin text-[#C6A15B]" />
-                            <span>Processing next graph node...</span>
-                          </div>
-                        )}
+                    {msg.role === "assistant" && loading && idx === messages.length - 1 && !msg.content && (
+                      <div className="flex items-center gap-2 text-xs text-[#8B8B8B] font-mono">
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#C6A15B]" />
+                        <span>Searching...</span>
                       </div>
                     )}
 
@@ -1622,7 +1597,6 @@ function AppShell() {
                   <Send className="w-4 h-4" />
                 </button>
               </form>
-              <p className="text-center text-[10px] font-mono uppercase tracking-wider text-[#8B8B8B] mt-2.5">Powered by LangGraph Agent Orchestrator &amp; Gemini 3.6-Flash Engine</p>
             </div>
           </>
         ) : (
@@ -1641,7 +1615,7 @@ function AppShell() {
                 <>
                   <div>
                     <h3 className="text-lg font-display text-[#2B2B2B] flex items-center gap-2"><Sparkles className="w-5 h-5 text-[#C6A15B]" /> Property Room &amp; BHK Verification</h3>
-                    <p className="text-xs text-[#8B8B8B] mt-1">Upload listing photographs to independently verify declared BHK configurations using Gemini 3.6 Flash vision AI.</p>
+                    <p className="text-xs text-[#8B8B8B] mt-1">Upload listing photographs to independently verify declared BHK configurations using AI vision.</p>
                   </div>
 
                   <div className="space-y-2">
@@ -1683,7 +1657,7 @@ function AppShell() {
                   )}
 
                   <button onClick={handleVerifySubmit} disabled={selectedFiles.length === 0 || verifyLoading} className="w-full py-3 bg-[#C6A15B] hover:bg-[#D9B876] disabled:opacity-40 text-[#1E1E1E] font-semibold text-xs rounded-sm transition font-mono uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg">
-                    {verifyLoading ? (<><Loader2 className="w-4 h-4 animate-spin" /> Analyzing via Gemini 3.6 Flash...</>) : (<><Sparkles className="w-4 h-4" /> Verify BHK Configuration Now</>)}
+                    {verifyLoading ? (<><Loader2 className="w-4 h-4 animate-spin" /> Verifying...</>) : (<><Sparkles className="w-4 h-4" /> Verify BHK Configuration Now</>)}
                   </button>
                 </>
               )}
@@ -1765,7 +1739,7 @@ function AppShell() {
 
                   <button onClick={handleVerifyLinkSubmit} disabled={!propertyUrl.trim() || linkFiles.length === 0 || linkVerifyLoading} className="w-full py-3 bg-[#C6A15B] hover:bg-[#D9B876] disabled:opacity-40 text-[#1E1E1E] font-semibold text-xs rounded-sm transition font-mono uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg">
                     {linkVerifyLoading ? (
-                      <><Loader2 className="w-4 h-4 animate-spin" /> {pastedDescription.trim() ? "Analyzing pasted description via Gemini..." : "Scraping listing & analyzing via Gemini..."}</>
+                      <><Loader2 className="w-4 h-4 animate-spin" /> Verifying...</>
                     ) : (
                       <><Sparkles className="w-4 h-4" /> {pastedDescription.trim() ? "Compare Pasted Description to Photos" : "Compare Listing to Photos"}</>
                     )}

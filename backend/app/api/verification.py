@@ -3,8 +3,7 @@ from urllib.parse import urlparse
 
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from starlette.concurrency import run_in_threadpool
-from app.services.room_classifier import classify_room
-from app.services.bhk_verifier import verify_bhk
+from app.services.gemini_verifier import verify_property_with_gemini
 from app.services.link_verifier import MAX_SCRAPED_CHARS, scrape_listing_url, verify_listing_against_photos
 
 router = APIRouter(prefix="/api/v1", tags=["Verification"])
@@ -22,28 +21,17 @@ async def verify_property(
     if len(images) > 12:
         raise HTTPException(status_code=400, detail="Maximum limit of 12 images exceeded.")
 
-    classified_results = []
-
+    image_payload = []
     for idx, img in enumerate(images):
         if not img.content_type or not img.content_type.startswith("image/"):
             raise HTTPException(status_code=400, detail=f"File {img.filename} is not a valid image.")
-
         image_bytes = await img.read()
+        image_payload.append({"photo_index": idx + 1, "image_bytes": image_bytes, "mime_type": img.content_type})
 
-        try:
-            result = await run_in_threadpool(classify_room, image_bytes)
-            # Inject bytes and index for the downstream deduplicator pipeline
-            result["image_bytes"] = image_bytes
-            result["photo_index"] = idx + 1
-            classified_results.append(result)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error processing image {img.filename}: {str(e)}")
-
-    verdict = await run_in_threadpool(verify_bhk, classified_results, claimed_bhk)
-
-    # Clear heavy image bytes from memory before returning the JSON response
-    for room in verdict.get("all_detected_rooms", []):
-        room.pop("image_bytes", None)
+    try:
+        verdict = await run_in_threadpool(verify_property_with_gemini, image_payload, claimed_bhk)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"AI verification failed: {str(e)}")
 
     return {
         "verdict": verdict,

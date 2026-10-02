@@ -1,4 +1,5 @@
 import os
+import re
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from app.agents.state import AgentState
@@ -45,11 +46,14 @@ def sql_execution_node(state: AgentState) -> AgentState:
             min_price=filters.get("min_price") or None,
             max_price=filters.get("max_price") or None,
             min_bhk=filters.get("min_bhk") or None,
+            bhk_or_more=bool(filters.get("bhk_or_more")),
             property_type=filters.get("property_type") or None,
             listing_type=filters.get("listing_type") or None,
+            # Only surface our own broker-uploaded listings for the "Interested" flow
+            on_platform_only=True,
+            with_images_only=True,
         )
-        # Only surface our own broker-uploaded listings for the "Interested" flow
-        results = [r for r in (results or []) if r.get("on_platform")]
+        results = results or []
         print(f"\n--- [DEBUG] SQL Execution (on-platform) Count: {len(results)} ---\n")
         return {**state, "sql_results": results}
     except Exception as e:
@@ -59,13 +63,52 @@ def sql_execution_node(state: AgentState) -> AgentState:
         db.close()
 
 def rag_execution_node(state: AgentState) -> AgentState:
+    """
+    Retrieves and answers directly from indexed documents (RERA Act text,
+    brochures) -- a document Q&A, not a property listing search, so it gets
+    its own grounded prompt rather than flowing into the listings synthesizer.
+    """
     query = state.get("user_query", "real estate")
-    results = query_unstructured_rag(query_text=query, top_k=2)
-    return {**state, "rag_results": results}
+    results = query_unstructured_rag(query_text=query, top_k=4)
+
+    if results:
+        context = "\n\n".join(f"[Source: {r['source']}]\n{r['document']}" for r in results)
+        prompt = f"""You are a real estate legal/compliance assistant. Answer the user's \
+question using ONLY the document excerpts below - do not invent facts, section numbers, \
+or rates that aren't stated in them. If the excerpts don't fully answer the question, \
+say what they do cover and note that the rest depends on the applicable state's RERA \
+rules or the specific buyer agreement.
+
+USER QUESTION: "{query}"
+
+DOCUMENT EXCERPTS:
+{context}
+
+Write a clear, direct Markdown answer (short paragraphs and/or bullet points). Cite the \
+source document by name in parentheses when you state a specific rule from it."""
+        try:
+            response = llm.invoke(prompt)
+            content = response.content
+        except Exception as e:
+            print(f"\n[WARNING] RAG synthesis LLM failed: {e}\n")
+            content = "I'm currently experiencing high traffic. Please wait a moment and try again."
+    else:
+        content = (
+            "I couldn't find anything on that in our indexed documents. Try rephrasing, "
+            "or ask a general real-estate question instead."
+        )
+
+    return {
+        **state,
+        "rag_results": results,
+        "final_response": content,
+        "messages": [("assistant", content)],
+    }
 
 def web_search_node(state: AgentState) -> AgentState:
     query = state.get("user_query", "real estate properties")
-    results = query_web_search(query=f"{query} property listings for sale", max_results=6)
+    # fetch extra candidates so at least 3 distinct listings survive de-duplication
+    results = query_web_search(query=f"{query} property listings for sale", max_results=10)
     return {**state, "web_results": results}
 
 def general_knowledge_node(state: AgentState) -> AgentState:
@@ -99,11 +142,22 @@ Provide your response below:"""
         "messages": [("assistant", content)]
     }
 
+def _short_snippet(text, limit: int = 240) -> str:
+    """Flatten a raw search snippet into one readable sentence-ish line."""
+    text = re.sub(r"[#*|>\[\]]+", " ", text or "")
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return "No description available."
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = cut.rfind(". ")
+    return cut[: end + 1] if end > limit // 2 else cut.rsplit(" ", 1)[0] + "..."
+
 def synthesizer_node(state: AgentState) -> AgentState:
     print("\n--- [DEBUG] Executing LLM Synthesizer Node! ---\n")
     query = state.get("user_query", "")
     sql_results = state.get("sql_results", []) or []
-    rag_results = state.get("rag_results", []) or []
     web_results = state.get("web_results", []) or []
 
     # Our own broker listings are rendered by the frontend as interactive cards
@@ -124,8 +178,6 @@ def synthesizer_node(state: AgentState) -> AgentState:
 
     if web_results:
         context_data = f"Raw web search results (title, url, snippet):\n{web_results}"
-    elif rag_results:
-        context_data = f"Document snippets:\n{rag_results}"
     else:
         context_data = "No external web results were found."
 
@@ -146,20 +198,27 @@ Write a Markdown answer covering ONLY web options. Follow this exactly:
 - Price: <price or range from the data; write "Not stated" only if truly absent — do NOT write "Price on request">
 - Configuration: <e.g. 3 BHK, 1660 sq.ft.>
 - Builder/Seller: <name if present, else omit this line>
-- Highlights: <1 short line of amenities/USP from the snippet, else omit>
+- Description: <1-2 sentences describing the property from the snippet — size,
+  amenities, possession status, nearby landmarks, what makes it stand out>
 - 👉 [View Listing](<one exact URL from that item>)
 
 RULES:
 - DE-DUPLICATE hard: if two items are the same project, the same portal search
   page, or near-identical titles ("3 BHK Flat in X" vs "Resale 3 BHK Flat in X"),
   keep only ONE — the more detailed one.
-- Skip any item that just points to a portal search/category page with no real
-  project. Skip anything matching an on-platform listing name above.
-- Exactly ONE link per block. Never repeat a URL. Never invent one or a price.
-- Keep only properties in the location/budget the user asked for. Max 4 blocks.
+- Prefer items about a specific named project. If a portal/search page's snippet
+  names a specific project, use THAT project name as the heading (with the portal
+  URL as its link). Skip anything matching an on-platform listing name above.
+- Give AT LEAST 3 blocks and at most 5. If fewer than 3 named projects exist,
+  fill the remaining slots with the most relevant remaining items, using a
+  descriptive heading built from the snippet (e.g. "3 BHK Flats near Vijay Nagar,
+  Indore — MagicBricks") rather than the raw page title.
+- Every block MUST have a Description line — never output just a name and link.
+- Exactly ONE link per block. Never repeat a URL. Never invent a URL, price or fact.
+- Keep only properties in the location/budget the user asked for.
 - Separate blocks with one blank line.
-- If nothing usable remains, write "## Results from Web" then one line saying no
-  distinct web listings were found and suggest broadening the search.
+- Only if the web data is completely empty, write "## Results from Web" then one
+  line saying no web listings were found and suggest broadening the search.
 """
 
     try:
@@ -167,10 +226,20 @@ RULES:
         content = response.content
     except Exception as e:
         print(f"\n[WARNING] Synthesizer LLM Quota hit: {e}\n")
-        if sql_results:
+        # The LLM only formats the web results -- if it's down, still show them
+        # with a description pulled straight from the search snippet.
+        blocks = [
+            f"**{w['title']}**\n- Description: {_short_snippet(w.get('snippet'))}"
+            f"\n- 👉 [View Listing]({w['url']})"
+            for w in web_results
+            if w.get("url") and w.get("title") and not w.get("error")
+        ]
+        if blocks:
+            content = "## Results from Web\n\n" + "\n\n".join(blocks[:5])
+        elif sql_results:
             content = (
                 f"You have {len(sql_results)} verified listing(s) from our brokers "
-                "shown above. (Web summary is unavailable right now -- please retry.)"
+                "shown above. No web results were found."
             )
         else:
             content = "I'm currently experiencing high traffic. Please wait a moment and try your query again."
@@ -217,7 +286,7 @@ builder.add_conditional_edges(
 # synthesise both (frontend renders the SQL listings as "Interested" cards).
 builder.add_edge("sql_execution", "web_search_execution")
 builder.add_edge("web_search_execution", "synthesizer")
-builder.add_edge("rag_execution", "synthesizer")
+builder.add_edge("rag_execution", END)
 
 builder.add_edge("general_knowledge", END)
 builder.add_edge("synthesizer", END)

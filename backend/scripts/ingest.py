@@ -14,7 +14,7 @@ def main():
         
         print("Starting Data Ingestion Pipeline...")
         run_structured_ingestion(csv_file, db)
-        run_unstructured_ingestion(pdf_file)
+        run_unstructured_ingestion(pdf_file, source="ABC Residency Brochure PDF")
         print("Ingestion Pipeline Executed Successfully!")
     finally:
         db.close()

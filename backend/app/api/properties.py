@@ -110,6 +110,11 @@ def express_interest(
         )
 
     broker = db.query(UserModel).filter(UserModel.id == prop.broker_id).first()
+    if not broker:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="The assigned broker could not be found.",
+        )
 
     existing = (
         db.query(PropertyInterest)
@@ -128,6 +133,9 @@ def express_interest(
         )
         db.add(interest)
         db.commit()
+    elif payload.message:
+        existing.message = payload.message
+        db.commit()
 
         # Notify the broker (SMS + WhatsApp + email; fire-and-forget) on the
         # broker's own registered contact details only. Only on a NEW
@@ -141,6 +149,17 @@ def express_interest(
             user_phone=current_user.phone_number,
             user_email=current_user.email,
         )
+    # Notify the broker (SMS + WhatsApp + email; fire-and-forget) on the
+    # broker's own registered contact details whenever a user clicks "I'm interested".
+    background_tasks.add_task(
+        notify_broker,
+        broker_phone=broker.phone_number if broker else None,
+        broker_email=broker.email if broker else None,
+        user_name=current_user.name,
+        property_name=prop.property_name,
+        user_phone=current_user.phone_number,
+        user_email=current_user.email,
+    )
 
     return {
         "property_id": prop.id,

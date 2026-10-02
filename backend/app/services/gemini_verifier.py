@@ -18,6 +18,8 @@ from langchain_core.messages import HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import BaseModel, Field
 
+from app.services.image_utils import compress_for_llm
+
 load_dotenv()
 
 ROOM_TYPES = ["bedroom", "bathroom", "kitchen", "living_room", "dining_room", "closet", "other"]
@@ -72,6 +74,7 @@ def _model() -> ChatGoogleGenerativeAI:
 
 
 def _image_part(image_bytes: bytes, mime_type: str) -> dict:
+    image_bytes, mime_type = compress_for_llm(image_bytes, mime_type)
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     return {"type": "image_url", "image_url": f"data:{mime_type};base64,{b64}"}
 
