@@ -4,9 +4,10 @@ import {
   SlidersHorizontal, Loader2, AlertTriangle, CheckCircle2, CheckCircle, X, Phone, Mail, User, UserCircle,
 } from "lucide-react";
 import CasivaLogo from "./CasivaLogo";
+import { API_ORIGIN } from "../config";
 
-const API_BASE = "http://localhost:8000/api/v1";
-const MEDIA_BASE = "http://localhost:8000";
+const API_BASE = `${API_ORIGIN}/api/v1`;
+const MEDIA_BASE = `${API_ORIGIN}`;
 
 // Broker-uploaded photos are server-relative ("/static/uploads/xxx.jpg");
 // seed-data photos are already-absolute URLs (e.g. Unsplash). Only prefix

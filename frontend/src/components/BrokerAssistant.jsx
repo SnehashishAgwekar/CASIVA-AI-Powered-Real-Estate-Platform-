@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { MessageCircle, X, Send, Loader2, User, Phone, Mail, Sparkles } from "lucide-react";
+import { API_ORIGIN } from "../config";
 
-const API_ASSISTANT_URL = "http://localhost:8000/api/v1/broker/assistant";
+const API_ASSISTANT_URL = `${API_ORIGIN}/api/v1/broker/assistant`;
 
 const WELCOME = {
   role: "bot",

@@ -12,11 +12,14 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Chromium for Crawl4AI ("Verify via Link" scraping)
+RUN playwright install --with-deps chromium
+
 # Copy application source code
 COPY . .
 
 # Expose FastAPI port
 EXPOSE 8000
 
-# Start Uvicorn production server
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Start Uvicorn production server (Render injects $PORT; default 8000 locally)
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
